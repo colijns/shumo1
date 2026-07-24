@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# 输出文件
+output/
+*.xlsx
+*.xls
+*.csv
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+*.gif
+
+# 环境/IDE
+.env
+.venv
+venv/
+.claude/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 赛题附件（原始数据，非代码）
+attachment/
+
+# 其他
+*.zip
+*.rar
+node_modules/
