@@ -23,6 +23,7 @@ output/
 .venv
 venv/
 .claude/
+.reasonix/
 .idea/
 .vscode/
 *.swp
