@@ -38,6 +38,9 @@ def solve_park_optimization(
     capacity_bounds=None,  # 容量上界 (功率kW, 容量kWh)
     verbose=False,   # 是否打印求解器日志
     big_M=None,     # 大 M 值
+    charge_cost=None,  # (光伏充电价, 风电充电价)；None 表示与消纳同价 (C_PV, C_W)
+    c_p_ess=None,   # 储能功率单价覆盖；None 表示用 data_loader.C_P_ESS
+    c_e_ess=None,   # 储能容量单价覆盖；None 表示用 data_loader.C_E_ESS
 ):
     """
     求解单个园区的储能运行优化 MILP 模型。
@@ -50,6 +53,10 @@ def solve_park_optimization(
         capacity_bounds : 如 (200, 600)，限制容量变量搜索上界
         verbose         : 是否打印求解器日志
         big_M           : 大 M 值，None 时自动计算
+        charge_cost     : (c_pv, c_w)，充电能量单价；None 时与消纳同价 (C_PV, C_W)。
+                          用于 Q2(2) 充电成本敏感性：解耦"充电绿电价"与"负荷绿电价"。
+        c_p_ess, c_e_ess: 储能功率/容量单价覆盖；None 时用 data_loader 常量。
+                          用于 Q2(2) 投资价格敏感性。默认值下与原行为完全一致。
 
     返回：
         dict，包含求解状态、变量值、各项指标
@@ -151,18 +158,28 @@ def solve_park_optimization(
         prob += P_ch[t] <= big_M * z[t], f'mutex_ch_{t}'
         prob += P_dis[t] <= big_M * (1 - z[t]), f'mutex_dis_{t}'
 
+    # ----- 成本参数（默认与 data_loader 常量一致，保证 Q1/Q2(1) 行为不变）-----
+    # 充电能量单价：None 时与消纳同价；否则解耦，用于 Q2(2) 充电成本敏感性
+    if charge_cost is None:
+        c_ch_pv, c_ch_w = C_PV, C_W
+    else:
+        c_ch_pv, c_ch_w = charge_cost
+    # 储能投资单价：None 时用 data_loader 常量，用于 Q2(2) 投资价格敏感性
+    cp_ess = C_P_ESS if c_p_ess is None else c_p_ess
+    ce_ess = C_E_ESS if c_e_ess is None else c_e_ess
+
     # ----- 目标函数 -----
-    # 典型日运行成本
+    # 典型日运行成本：负荷绿电按 C_PV/C_W，充电绿电按 c_ch_*（默认相同）
     daily_cost = pulp.lpSum([
-        C_PV * (P_load_pv[t] + P_ch_pv[t]) * DT +
-        C_W * (P_load_w[t] + P_ch_w[t]) * DT +
+        C_PV * P_load_pv[t] * DT + c_ch_pv * P_ch_pv[t] * DT +
+        C_W * P_load_w[t] * DT + c_ch_w * P_ch_w[t] * DT +
         C_G * P_grid[t] * DT
         for t in t_range
     ])
 
     if optimize_capacity:
         # 年综合成本 = 365 * 日运行成本 + 年均投资
-        annual_inv = (C_P_ESS * actual_P_ess + C_E_ESS * actual_E_ess) / Y
+        annual_inv = (cp_ess * actual_P_ess + ce_ess * actual_E_ess) / Y
         prob += 365 * daily_cost + annual_inv, 'annual_total_cost'
     else:
         prob += daily_cost, 'daily_operating_cost'
@@ -230,7 +247,7 @@ def solve_park_optimization(
     result['re_ratio'] = total_re_use / total_re_gen if total_re_gen > 0 else 0.0
 
     # 年均投资（固定储能也有投资成本，此处统一计算用于年综合成本）
-    result['inv_cost'] = (C_P_ESS * final_P_ess + C_E_ESS * final_E_ess)
+    result['inv_cost'] = (cp_ess * final_P_ess + ce_ess * final_E_ess)
     result['inv_annual'] = result['inv_cost'] / Y
 
     # 年综合成本
