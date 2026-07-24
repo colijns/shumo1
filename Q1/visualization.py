@@ -64,6 +64,7 @@ def plot_storage_dispatch(result, park_name, plan_name, P_ess, E_ess, save_path=
     set_chinese_style()
     _fix_chinese_font()
     t = np.arange(24)
+    t_soc = np.arange(25)
 
     fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
 
@@ -82,15 +83,15 @@ def plot_storage_dispatch(result, park_name, plan_name, P_ess, E_ess, save_path=
 
     # 下：SOC
     ax = axes[1]
-    soc = np.array(result['E'][:24]) / E_ess if E_ess > 0 else np.zeros(24)
-    ax.plot(t, soc * 100, 'b-', linewidth=2, marker='o', markersize=4)
+    soc = np.array(result['E'][:25]) / E_ess if E_ess > 0 else np.zeros(25)
+    ax.plot(t_soc, soc * 100, 'b-', linewidth=2, marker='o', markersize=4)
     ax.axhline(90, color='r', linestyle='--', linewidth=1, alpha=0.5, label='SOC上限 (90%)')
     ax.axhline(10, color='r', linestyle='--', linewidth=1, alpha=0.5, label='SOC下限 (10%)')
-    ax.set_xlabel('时刻 (h)')
+    ax.set_xlabel('SOC时点（t=24为日末状态）')
     ax.set_ylabel('SOC (%)')
     ax.set_title(f'园区{park_name} {plan_name} — 荷电状态')
-    ax.set_xticks(t)
-    ax.set_xlim(0, 23)
+    ax.set_xticks(np.arange(0, 25, 2))
+    ax.set_xlim(0, 24)
     ax.set_ylim(0, 100)
     ax.legend(loc='best')
     ax.grid(True, alpha=0.3)
@@ -139,7 +140,10 @@ def plot_comparison(summary_df, park_name, save_path=None):
 
     # 年综合成本
     ax = axes[2]
-    ax.bar(x, park_data['年综合成本(元)'].values / 10000, color=colors, width=0.6)
+    annual_cost = park_data['年综合成本(元)'].values / 10000
+    bars = ax.bar(x, annual_cost, color=colors, width=0.6)
+    ax.bar_label(bars, labels=[f'{value:.2f}' for value in annual_cost],
+                 padding=3, fontsize=8)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=15, ha='right')
     ax.set_ylabel('年综合成本 (万元)')

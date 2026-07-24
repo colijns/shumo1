@@ -34,6 +34,8 @@ def solve_park_optimization(
     P_ess=0,        # 储能额定功率 kW
     E_ess=0,        # 储能额定容量 kWh
     optimize_capacity=False,  # 是否将 P_ess/E_ess 作为决策变量
+    capacity_steps=None,  # 工程离散步长 (功率kW, 容量kWh)，None表示连续容量
+    capacity_bounds=None,  # 容量上界 (功率kW, 容量kWh)
     verbose=False,   # 是否打印求解器日志
     big_M=None,     # 大 M 值
 ):
@@ -44,6 +46,8 @@ def solve_park_optimization(
         load, G_pv, G_w : 24 时段数据
         P_ess, E_ess    : 固定储能容量（optimize_capacity=False 时使用）
         optimize_capacity: True 时 P_ess/E_ess 为决策变量
+        capacity_steps  : 如 (5, 10)，将容量限制为工程步长的整数倍
+        capacity_bounds : 如 (200, 600)，限制容量变量搜索上界
         verbose         : 是否打印求解器日志
         big_M           : 大 M 值，None 时自动计算
 
@@ -68,10 +72,24 @@ def solve_park_optimization(
     # ----- 决策变量 -----
     # 容量变量
     if optimize_capacity:
-        P_ess_var = pulp.LpVariable('P_ess', lowBound=0, upBound=big_M)
-        E_ess_var = pulp.LpVariable('E_ess', lowBound=0, upBound=big_M)
-        actual_P_ess = P_ess_var
-        actual_E_ess = E_ess_var
+        P_upper, E_upper = capacity_bounds or (big_M, big_M)
+        if capacity_steps is None:
+            actual_P_ess = pulp.LpVariable('P_ess', lowBound=0, upBound=P_upper)
+            actual_E_ess = pulp.LpVariable('E_ess', lowBound=0, upBound=E_upper)
+        else:
+            P_step, E_step = capacity_steps
+            if P_step <= 0 or E_step <= 0:
+                raise ValueError('capacity_steps 必须为正数')
+            n_P = pulp.LpVariable(
+                'n_P_ess', lowBound=0,
+                upBound=int(P_upper // P_step), cat=pulp.LpInteger
+            )
+            n_E = pulp.LpVariable(
+                'n_E_ess', lowBound=0,
+                upBound=int(E_upper // E_step), cat=pulp.LpInteger
+            )
+            actual_P_ess = P_step * n_P
+            actual_E_ess = E_step * n_E
     else:
         actual_P_ess = P_ess
         actual_E_ess = E_ess
@@ -144,7 +162,7 @@ def solve_park_optimization(
 
     if optimize_capacity:
         # 年综合成本 = 365 * 日运行成本 + 年均投资
-        annual_inv = (C_P_ESS * P_ess_var + C_E_ESS * E_ess_var) / Y
+        annual_inv = (C_P_ESS * actual_P_ess + C_E_ESS * actual_E_ess) / Y
         prob += 365 * daily_cost + annual_inv, 'annual_total_cost'
     else:
         prob += daily_cost, 'daily_operating_cost'
@@ -266,9 +284,23 @@ def run_fixed_storage(load, G_pv, G_w, P_ess=50, E_ess=100):
 
 
 def run_optimized_storage(load, G_pv, G_w):
-    """优化容量方案"""
+    """连续容量理论最优方案"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=0, E_ess=0,
                                    optimize_capacity=True)
+
+
+def run_engineering_storage(
+    load, G_pv, G_w,
+    P_step=5, E_step=10,
+    P_max=200, E_max=600,
+):
+    """按工程步长直接求整数容量最优方案。"""
+    return solve_park_optimization(
+        load, G_pv, G_w,
+        optimize_capacity=True,
+        capacity_steps=(P_step, E_step),
+        capacity_bounds=(P_max, E_max),
+    )
 
 
 def run_fixed_capacity(load, G_pv, G_w, P_ess, E_ess):
