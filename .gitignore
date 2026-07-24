@@ -39,4 +39,5 @@ attachment/
 # 其他
 *.zip
 *.rar
+*.7z
 node_modules/
