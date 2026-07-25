@@ -1,0 +1,90 @@
+============================= test session starts =============================
+platform win32 -- Python 3.10.20, pytest-9.1.1, pluggy-1.6.0 -- E:\Software\Scoop\apps\miniconda3\current\envs\math\python.exe
+cachedir: .pytest_cache
+rootdir: D:\code_warehouse\Projects\shumo1
+collecting ... collected 20 items
+
+Q2/test_q2_2_penalty_verify.py::test_lambda_zero_reproduces_view_a PASSED [  5%]
+Q2/test_q2_2_penalty_verify.py::test_lambda_zero_integer_zero PASSED     [ 10%]
+Q2/test_q2_2_penalty_verify.py::test_lambda_zero_charge_cost_break_even PASSED [ 15%]
+Q2/test_q2_2_penalty_verify.py::test_lambda_zero_investment_baseline PASSED [ 20%]
+Q2/test_q2_2_penalty_verify.py::test_baseline_penalty_math[0.0] PASSED   [ 25%]
+Q2/test_q2_2_penalty_verify.py::test_baseline_penalty_math[0.3] PASSED   [ 30%]
+Q2/test_q2_2_penalty_verify.py::test_baseline_penalty_math[0.6] PASSED   [ 35%]
+Q2/test_q2_2_penalty_verify.py::test_penalty_flips_storage_positive[0.3] PASSED [ 40%]
+Q2/test_q2_2_penalty_verify.py::test_penalty_flips_storage_positive[0.6] PASSED [ 45%]
+Q2/test_q2_2_penalty_verify.py::test_optimal_dominates_baseline[0.3] PASSED [ 50%]
+Q2/test_q2_2_penalty_verify.py::test_optimal_dominates_baseline[0.6] PASSED [ 55%]
+Q2/test_q2_2_penalty_verify.py::test_low_charge_cost_positive[0.3] PASSED [ 60%]
+Q2/test_q2_2_penalty_verify.py::test_low_charge_cost_positive[0.6] PASSED [ 65%]
+Q2/test_q2_2_penalty_verify.py::test_structural_constraints_at_lambda_03 PASSED [ 70%]
+Q2/test_q2_2_penalty_verify.py::test_lambda_sensitivity_structure PASSED [ 75%]
+Q2/test_q2_2_penalty_verify.py::test_lambda_saving_grows_with_lambda PASSED [ 80%]
+Q2/test_q2_2_penalty_verify.py::test_grid_matches_continuous[0.0] PASSED [ 85%]
+Q2/test_q2_2_penalty_verify.py::test_grid_matches_continuous[0.3] FAILED [ 90%]
+Q2/test_q2_2_penalty_verify.py::test_grid_matches_continuous[0.6] FAILED [ 95%]
+Q2/test_q2_2_penalty_verify.py::test_lambda_zero_grid_origin_optimal PASSED [100%]
+
+================================== FAILURES ===================================
+______________________ test_grid_matches_continuous[0.3] ______________________
+
+joint_profile = (array([ 818.,  820.,  913.,  918.,  871.,  815.,  883.,  957.,  931.,
+        879., 1047., 1100., 1253., 1278., 1248....61.6 , 278.1 , 521.35, 352.05, 172.  , 300.25,
+       510.15, 512.5 , 659.95, 629.55, 304.85, 261.05, 248.35, 116.15]))
+lam = 0.3
+
+    @pytest.mark.skipif(not _SLOW, reason="完整 2501 点网格×3 耗时 ~5min，设 RUN_SLOW=1 启用")
+    @pytest.mark.parametrize('lam', LAMBDA_VALUES)
+    def test_grid_matches_continuous(joint_profile, lam):
+        """完整 2D 网格全局最优 = 连续 MILP 最优（±工程粒度）。"""
+        L, Gpv, Gw = joint_profile
+        r_cont = solve_continuous(L, Gpv, Gw, lam=lam)
+        gs = grid_search_2d(L, Gpv, Gw, lam=lam, verbose=False)
+        best = gs['best']
+        assert abs(best['P_ess'] - r_cont['P_ess']) <= P_STEP + TOL
+        assert abs(best['E_ess'] - r_cont['E_ess']) <= E_STEP + TOL
+        # 网格成本 ≥ 连续成本（连续是下界），且差距在工程粒度内
+        assert best['annual_cost'] >= r_cont['annual_cost'] - ANN_TOL
+>       assert abs(best['annual_cost'] - r_cont['annual_cost']) < 5 * ANN_TOL + 1
+E       assert np.float64(76.43066800106317) < ((5 * 1.0) + 1)
+E        +  where np.float64(76.43066800106317) = abs((np.float64(5633922.690680002) - 5633846.260012001))
+
+Q2\test_q2_2_penalty_verify.py:223: AssertionError
+______________________ test_grid_matches_continuous[0.6] ______________________
+
+joint_profile = (array([ 818.,  820.,  913.,  918.,  871.,  815.,  883.,  957.,  931.,
+        879., 1047., 1100., 1253., 1278., 1248....61.6 , 278.1 , 521.35, 352.05, 172.  , 300.25,
+       510.15, 512.5 , 659.95, 629.55, 304.85, 261.05, 248.35, 116.15]))
+lam = 0.6
+
+    @pytest.mark.skipif(not _SLOW, reason="完整 2501 点网格×3 耗时 ~5min，设 RUN_SLOW=1 启用")
+    @pytest.mark.parametrize('lam', LAMBDA_VALUES)
+    def test_grid_matches_continuous(joint_profile, lam):
+        """完整 2D 网格全局最优 = 连续 MILP 最优（±工程粒度）。"""
+        L, Gpv, Gw = joint_profile
+        r_cont = solve_continuous(L, Gpv, Gw, lam=lam)
+        gs = grid_search_2d(L, Gpv, Gw, lam=lam, verbose=False)
+        best = gs['best']
+        assert abs(best['P_ess'] - r_cont['P_ess']) <= P_STEP + TOL
+        assert abs(best['E_ess'] - r_cont['E_ess']) <= E_STEP + TOL
+        # 网格成本 ≥ 连续成本（连续是下界），且差距在工程粒度内
+        assert best['annual_cost'] >= r_cont['annual_cost'] - ANN_TOL
+>       assert abs(best['annual_cost'] - r_cont['annual_cost']) < 5 * ANN_TOL + 1
+E       assert np.float64(76.43055849988014) < ((5 * 1.0) + 1)
+E        +  where np.float64(76.43055849988014) = abs((np.float64(5714067.037160001) - 5713990.606601501))
+
+Q2\test_q2_2_penalty_verify.py:223: AssertionError
+============================== warnings summary ===============================
+Q2/test_q2_2_penalty_verify.py: 2667540 warnings
+  E:\Software\Scoop\apps\miniconda3\current\envs\math\lib\site-packages\pulp\pulp.py:318: DeprecationWarning: Constructing LpVariable(name, ...) directly is deprecated; in PuLP 4.0 use prob.add_variable(name, lowBound, upBound, cat=...). Variables are then attached to the model when created.
+    _v4_deprecation(msg, stacklevel=2)
+
+Q2/test_q2_2_penalty_verify.py: 10066 warnings
+  E:\Software\Scoop\apps\miniconda3\current\envs\math\lib\site-packages\pulp\apis\coin_api.py:70: DeprecationWarning: PULP_CBC_CMD is deprecated and will be removed in PuLP 4.0. Install CBC with `pip install pulp[cbc]` and use COIN_CMD instead.
+    v4_deprecation(PULP_CBC_CMD_DEPRECATION_MSG, stacklevel=stacklevel)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED Q2/test_q2_2_penalty_verify.py::test_grid_matches_continuous[0.3] - as...
+FAILED Q2/test_q2_2_penalty_verify.py::test_grid_matches_continuous[0.6] - as...
+========= 2 failed, 18 passed, 2677606 warnings in 386.82s (0:06:26) ==========

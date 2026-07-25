@@ -18,7 +18,8 @@ from milp_model import run_fixed_capacity
 def grid_search_capacity(load, G_pv, G_w,
                           P_range=(0, 300, 5),
                           E_range=(0, 1000, 10),
-                          verbose=True):
+                          verbose=True,
+                          curt_penalty=0.0):
     """
     网格搜索最优储能容量。
 
@@ -27,6 +28,8 @@ def grid_search_capacity(load, G_pv, G_w,
         P_range : (min, max, step) 功率搜索范围 kW
         E_range : (min, max, step) 容量搜索范围 kWh
         verbose : 是否打印进度
+        curt_penalty : 弃电惩罚因子 λ (元/kWh)，透传给 solve_park_optimization。
+                       默认 0 = View A，与原行为一致。
 
     返回：
         dict:
@@ -54,7 +57,8 @@ def grid_search_capacity(load, G_pv, G_w,
             if verbose and count % 500 == 0:
                 print(f'  网格搜索进度: {count}/{total} ({100*count/total:.0f}%)')
 
-            result = run_fixed_capacity(load, G_pv, G_w, P_ess=p, E_ess=e)
+            result = run_fixed_capacity(load, G_pv, G_w, P_ess=p, E_ess=e,
+                                        curt_penalty=curt_penalty)
             if not result['success']:
                 continue
 

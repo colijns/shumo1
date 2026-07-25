@@ -41,6 +41,7 @@ def solve_park_optimization(
     charge_cost=None,  # (光伏充电价, 风电充电价)；None 表示与消纳同价 (C_PV, C_W)
     c_p_ess=None,   # 储能功率单价覆盖；None 表示用 data_loader.C_P_ESS
     c_e_ess=None,   # 储能容量单价覆盖；None 表示用 data_loader.C_E_ESS
+    curt_penalty=0.0,  # 弃电惩罚因子 λ (元/kWh)；0 时退化为 View A (弃电免费)
 ):
     """
     求解单个园区的储能运行优化 MILP 模型。
@@ -57,6 +58,10 @@ def solve_park_optimization(
                           用于 Q2(2) 充电成本敏感性：解耦"充电绿电价"与"负荷绿电价"。
         c_p_ess, c_e_ess: 储能功率/容量单价覆盖；None 时用 data_loader 常量。
                           用于 Q2(2) 投资价格敏感性。默认值下与原行为完全一致。
+        curt_penalty    : 弃电惩罚因子 λ (元/kWh)，对弃风弃光计价。
+                          默认 0 = View A（弃电不计成本），Q1/Q2(1)/Q2(2) 无惩罚版行为不变。
+                          >0 时目标函数加 λ·(P_curt_pv+P_curt_w)·Δt，daily_cost 含惩罚项；
+                          另导出 daily_curt_penalty 与 daily_cost_pure（不含惩罚）。
 
     返回：
         dict，包含求解状态、变量值、各项指标
@@ -169,11 +174,13 @@ def solve_park_optimization(
     ce_ess = C_E_ESS if c_e_ess is None else c_e_ess
 
     # ----- 目标函数 -----
-    # 典型日运行成本：负荷绿电按 C_PV/C_W，充电绿电按 c_ch_*（默认相同）
+    # 典型日运行成本：负荷绿电按 C_PV/C_W，充电绿电按 c_ch_*（默认相同）；
+    # 弃电按 curt_penalty 计价（默认 0 = View A 弃电免费，Q1/Q2(1) 行为不变）。
     daily_cost = pulp.lpSum([
         C_PV * P_load_pv[t] * DT + c_ch_pv * P_ch_pv[t] * DT +
         C_W * P_load_w[t] * DT + c_ch_w * P_ch_w[t] * DT +
-        C_G * P_grid[t] * DT
+        C_G * P_grid[t] * DT +
+        curt_penalty * (P_curt_pv[t] + P_curt_w[t]) * DT
         for t in t_range
     ])
 
@@ -246,6 +253,11 @@ def solve_park_optimization(
     total_re_use = result['pv_use'] + result['w_use']
     result['re_ratio'] = total_re_use / total_re_gen if total_re_gen > 0 else 0.0
 
+    # 弃电惩罚分解（curt_penalty=0 时 daily_curt_penalty=0, daily_cost_pure=daily_cost）
+    result['curt_penalty'] = float(curt_penalty)
+    result['daily_curt_penalty'] = curt_penalty * result['curt_total']
+    result['daily_cost_pure'] = result['daily_cost'] - result['daily_curt_penalty']
+
     # 年均投资（固定储能也有投资成本，此处统一计算用于年综合成本）
     result['inv_cost'] = (cp_ess * final_P_ess + ce_ess * final_E_ess)
     result['inv_annual'] = result['inv_cost'] / Y
@@ -288,28 +300,32 @@ def solve_park_optimization(
     return result
 
 
-def run_no_storage(load, G_pv, G_w):
+def run_no_storage(load, G_pv, G_w, curt_penalty=0.0):
     """无储能方案 - 也走 MILP 以保证成本口径一致"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=0, E_ess=0,
-                                   optimize_capacity=False)
+                                   optimize_capacity=False,
+                                   curt_penalty=curt_penalty)
 
 
-def run_fixed_storage(load, G_pv, G_w, P_ess=50, E_ess=100):
+def run_fixed_storage(load, G_pv, G_w, P_ess=50, E_ess=100, curt_penalty=0.0):
     """固定容量储能方案"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=P_ess, E_ess=E_ess,
-                                   optimize_capacity=False)
+                                   optimize_capacity=False,
+                                   curt_penalty=curt_penalty)
 
 
-def run_optimized_storage(load, G_pv, G_w):
+def run_optimized_storage(load, G_pv, G_w, curt_penalty=0.0):
     """连续容量理论最优方案"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=0, E_ess=0,
-                                   optimize_capacity=True)
+                                   optimize_capacity=True,
+                                   curt_penalty=curt_penalty)
 
 
 def run_engineering_storage(
     load, G_pv, G_w,
     P_step=5, E_step=10,
     P_max=200, E_max=600,
+    curt_penalty=0.0,
 ):
     """按工程步长直接求整数容量最优方案。"""
     return solve_park_optimization(
@@ -317,13 +333,15 @@ def run_engineering_storage(
         optimize_capacity=True,
         capacity_steps=(P_step, E_step),
         capacity_bounds=(P_max, E_max),
+        curt_penalty=curt_penalty,
     )
 
 
-def run_fixed_capacity(load, G_pv, G_w, P_ess, E_ess):
+def run_fixed_capacity(load, G_pv, G_w, P_ess, E_ess, curt_penalty=0.0):
     """求解指定容量下的最优运行策略（用于网格搜索/取整验证）"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=P_ess, E_ess=E_ess,
-                                   optimize_capacity=False)
+                                   optimize_capacity=False,
+                                   curt_penalty=curt_penalty)
 
 
 if __name__ == '__main__':

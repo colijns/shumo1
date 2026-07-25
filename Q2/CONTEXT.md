@@ -34,3 +34,17 @@ _Avoid_: 度电成本、平均购电成本（口径不一）
 
 **联合负荷 / 联合光伏 / 联合风电 (Joint Load / PV / Wind)**：
 三园区逐时相加得到的 `L^J / G^{pv,J} / G^{w,J}`，上标 J 表示联合园区。园区B无光伏、园区A无风电，对应项为0。
+
+## 弃电惩罚扩展（View C）
+
+**弃电惩罚 (Curtailment Penalty)**：
+把原本免费的弃风弃光按 λ 元/kWh 计入目标函数的政策性成本项，迫使优化器提高消纳。λ=0 退化为 [[弃风弃光]]不计成本的原口径（View A，ADR 0002）。λ∈{0,0.3,0.6}，见 `docs/adr/0003-curtailment-penalty-view-c.md`。
+_Avoid_: 弃电成本（未点明是惩罚性计价）、弃电罚款
+
+**惩罚目标函数 (Penalized Objective)**：
+$C^{\mathrm{day}}(\lambda)$ = View A 日运行成本 + $\lambda\sum_t(P_t^{\mathrm{curt,pv}}+P_t^{\mathrm{curt,w}})\Delta t$。年综合 = $365\,C^{\mathrm{day}}(\lambda)+C^{\mathrm{inv,ann}}$。`daily_cost` 在 λ>0 时含惩罚项，`daily_cost_pure` 为不含惩罚的纯运行成本。
+_Avoid_: 带罚项目标（口语化）
+
+**λ 敏感性 (Lambda Sensitivity)**：
+固定其它参数扫惩罚因子 λ，观察最优储能功率/容量、年综合成本、弃电量、消纳率随 λ 的变化；定位使最优配置从 0/0 翻转为正的临界 λ。
+_Avoid_: 惩罚扫描
