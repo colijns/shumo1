@@ -33,6 +33,7 @@ D:\code_warehouse\Projects\shumo1/
 │   ├── USAGE.md             # 完整使用指南
 │   └── MODULES.md           # 模块速查表（AI 适配用，每模块一行）
 ├── docs/
+        题目.md # 当前赛题的问题提取
 │   └── 赛题结构化拆解.md     # 当前赛题的问题分析
 ├── attachment/              # 赛题附件数据
 ├── <题号>/                  # 各题代码目录（如 Q1/, Q2/ 等）
