@@ -14,7 +14,7 @@
 
 口径（ADR 0003）：
   - 基准（联合无储能）也按 λ 计弃电惩罚，所有方案同口径比较；
-  - 每个 λ 各跑完整 2501 点 2D 网格出热力图；
+  - 每个 λ 各跑完整 13468 点 2D 网格出热力图；
   - 保留充电成本 c 敏感性 + 投资价 s 敏感性（每个 λ 各一套）；
   - 新增 λ 敏感性主线：最优容量/成本/弃电 vs λ。
 
@@ -46,7 +46,9 @@ from data_loader import (  # noqa: E402
     C_PV, C_W, C_G, C_P_ESS, C_E_ESS, Y, ETA_C, ETA_D, DT,
 )
 from milp_model import (  # noqa: E402
-    solve_park_optimization, run_no_storage, run_fixed_storage,
+    solve_park_optimization,
+    run_no_storage as _run_no_storage,
+    run_fixed_storage as _run_fixed_storage,
     run_engineering_storage,
 )
 from grid_search import grid_search_capacity  # noqa: E402
@@ -55,9 +57,14 @@ from common.io_utils import export_result  # noqa: E402
 from common.plot_style import set_chinese_style, save_fig  # noqa: E402
 
 T = 24
-# 工程粒度与搜索上界（与 q2_storage.py 一致）
+# 工程粒度与物理充分上界：
+# 最大逐时风光余电为 448.115 kW，按 5 kW 向上取整得到 450 kW；
+# 全日风光余电 1237.175 kWh，经 ηc=0.95、可用 SOC 区间 0.8 折算为
+# 1469.145 kWh，按 10 kWh 向上取整得到 1470 kWh。
 P_STEP, E_STEP = 5, 10
-P_MAX, E_MAX = 200, 600
+P_MAX, E_MAX = 450, 1470
+GRID_POINT_COUNT = (P_MAX // P_STEP + 1) * (E_MAX // E_STEP + 1)
+SURPLUS_ONLY_CHARGE = True
 TOL = 1e-4
 
 # 弃电惩罚因子 λ（元/kWh）；λ=0 为 View A 对照
@@ -73,28 +80,68 @@ JOINT_NO_STORAGE_DAILY_CURT = 1237.175  # 无储能日弃风弃光 kWh（固定�
 # 求解（每个 λ 各一套）
 # =====================================================================
 
+def _attach_capacity_diagnostics(result):
+    """标记最优解是否触碰容量搜索上界，防止再次把截断解当成最终解。"""
+    result['capacity_bounds'] = (P_MAX, E_MAX)
+    if result.get('success'):
+        result['hits_p_upper'] = abs(result['P_ess'] - P_MAX) <= TOL
+        result['hits_e_upper'] = abs(result['E_ess'] - E_MAX) <= TOL
+        result['hits_capacity_upper'] = (
+            result['hits_p_upper'] or result['hits_e_upper']
+        )
+    else:
+        result['hits_p_upper'] = False
+        result['hits_e_upper'] = False
+        result['hits_capacity_upper'] = False
+    return result
+
+
+def run_no_storage(load, G_pv, G_w, curt_penalty=0.0):
+    """问题2（2）无储能基准；显式启用余电充电口径（P=E=0 时不改变结果）。"""
+    return _run_no_storage(
+        load, G_pv, G_w,
+        curt_penalty=curt_penalty,
+        surplus_only_charge=SURPLUS_ONLY_CHARGE,
+    )
+
+
+def run_fixed_storage(load, G_pv, G_w, P_ess=50, E_ess=100,
+                      curt_penalty=0.0):
+    """问题2（2）固定储能方案；储能只能吸收当小时风光余电。"""
+    return _run_fixed_storage(
+        load, G_pv, G_w,
+        P_ess=P_ess, E_ess=E_ess,
+        curt_penalty=curt_penalty,
+        surplus_only_charge=SURPLUS_ONLY_CHARGE,
+    )
+
+
 def solve_continuous(L_J, G_pv_J, G_w_J, lam=0.0,
                      charge_cost=None, c_p_ess=None, c_e_ess=None):
     """连续 MILP（含弃电惩罚 λ）：P_ess/E_ess 连续变量。"""
-    return solve_park_optimization(
+    result = solve_park_optimization(
         L_J, G_pv_J, G_w_J,
         optimize_capacity=True, capacity_bounds=(P_MAX, E_MAX),
         charge_cost=charge_cost, c_p_ess=c_p_ess, c_e_ess=c_e_ess,
         curt_penalty=lam,
+        surplus_only_charge=SURPLUS_ONLY_CHARGE,
     )
+    return _attach_capacity_diagnostics(result)
 
 
 def solve_integer(L_J, G_pv_J, G_w_J, lam=0.0):
     """工程整数 MILP（含弃电惩罚 λ）：P=5·n_P, E=10·n_E。"""
-    return run_engineering_storage(
+    result = run_engineering_storage(
         L_J, G_pv_J, G_w_J,
         P_step=P_STEP, E_step=E_STEP, P_max=P_MAX, E_max=E_MAX,
         curt_penalty=lam,
+        surplus_only_charge=SURPLUS_ONLY_CHARGE,
     )
+    return _attach_capacity_diagnostics(result)
 
 
 def grid_search_2d(L_J, G_pv_J, G_w_J, lam=0.0, verbose=True):
-    """2D 网格枚举（含弃电惩罚 λ）：41×61=2501 点。
+    """2D 网格枚举（含弃电惩罚 λ）：91×148=13468 点。
 
     返回 dict 同 q2_storage.grid_search_2d，但 daily_cost / annual_cost 含惩罚。
     """
@@ -102,6 +149,7 @@ def grid_search_2d(L_J, G_pv_J, G_w_J, lam=0.0, verbose=True):
         L_J, G_pv_J, G_w_J,
         P_range=(0, P_MAX, P_STEP), E_range=(0, E_MAX, E_STEP),
         verbose=verbose, curt_penalty=lam,
+        surplus_only_charge=SURPLUS_ONLY_CHARGE,
     )
     grid = gs['grid']
 
@@ -462,15 +510,15 @@ def verify_lambda_zero(r_cont, r_int, gs, sens_c, sens_inv, L_J, G_pv_J, G_w_J):
                            abs(r_cont['P_ch'][t] - r_cont['P_ch_pv'][t] - r_cont['P_ch_w'][t]))
     add('λ=0 不允许电网充电(结构性)',
         ch_from_grid < TOL, f"充电=光伏+风电充电，偏差={ch_from_grid:.2e}")
-    # 只用余电充电（涌现：充电仅出现在风光有富余的时段）
-    emerg_ok = True
+    # 只用余电充电（显式约束：每小时充电不超过风光余电）
+    surplus_ok = True
     for t in range(T):
-        if r_cont['P_ch'][t] > TOL:
-            if G_pv_J[t] + G_w_J[t] - L_J[t] < -TOL:
-                emerg_ok = False
-                break
-    add('λ=0 只用余电充电(涌现)', emerg_ok,
-        '充电仅出现在风光富余时段' if emerg_ok else '存在缺电时段充电')
+        surplus = max(G_pv_J[t] + G_w_J[t] - L_J[t], 0.0)
+        if r_cont['P_ch'][t] > surplus + TOL:
+            surplus_ok = False
+            break
+    add('λ=0 只用余电充电(显式约束)', surplus_ok,
+        '逐时充电功率均不超过风光余电' if surplus_ok else '存在超出风光余电的充电')
     # 不同时充放电
     add('λ=0 不同时充放电',
         all(not (r_cont['P_ch'][t] > TOL and r_cont['P_dis'][t] > TOL)
@@ -520,7 +568,8 @@ def verify_lambda_zero(r_cont, r_int, gs, sens_c, sens_inv, L_J, G_pv_J, G_w_J):
     return checks
 
 
-def verify_lambda_positive(r_cont, r_int, r_no, gs, sens_c, lam):
+def verify_lambda_positive(r_cont, r_int, r_no, gs, sens_c, lam,
+                           L_J, G_pv_J, G_w_J):
     """λ>0 层：惩罚适用检查。"""
     checks = []
     e = r_cont['errors']
@@ -532,6 +581,12 @@ def verify_lambda_positive(r_cont, r_int, r_no, gs, sens_c, lam):
         e['max_balance_error'] < TOL, f"max={e['max_balance_error']:.2e}")
     add(f'λ={lam} 风光分配误差<1e-4',
         e['max_re_error'] < TOL, f"max={e['max_re_error']:.2e}")
+    surplus_ok = all(
+        r_cont['P_ch'][t] <= max(G_pv_J[t] + G_w_J[t] - L_J[t], 0.0) + TOL
+        for t in range(T)
+    )
+    add(f'λ={lam} 只用当小时风光余电充电',
+        surplus_ok, '逐时显式约束生效')
     add(f'λ={lam} 不同时充放电',
         all(not (r_cont['P_ch'][t] > TOL and r_cont['P_dis'][t] > TOL)
             for t in range(T)), 'z 互斥约束生效')
@@ -559,6 +614,9 @@ def verify_lambda_positive(r_cont, r_int, r_no, gs, sens_c, lam):
     add(f'λ={lam} 最优弃电≤基准弃电(1237.175)',
         r_cont['curt_total'] <= r_no['curt_total'] + 1e-2,
         f"最优弃电={r_cont['curt_total']:.3f} ≤ {r_no['curt_total']:.3f}")
+    add(f'λ={lam} 连续最优未触碰物理容量上界',
+        not r_cont['hits_capacity_upper'],
+        f"P={r_cont['P_ess']:.3f}/{P_MAX}, E={r_cont['E_ess']:.3f}/{E_MAX}")
     # 消纳率 ≥ 基准
     add(f'λ={lam} 消纳率≥基准',
         r_cont['re_ratio'] >= r_no['re_ratio'] - 1e-6,
@@ -630,7 +688,7 @@ def run_q2_2_penalty(output_dir=None):
         print(f"      最优: P={r_int['P_ess']:.1f}, E={r_int['E_ess']:.1f}, "
               f"年综合={r_int['annual_cost']:.3f} ({time.time()-t0:.1f}s)")
 
-        print(f'  [d] 2D 网格枚举 (2501 点)...')
+        print(f'  [d] 2D 网格枚举 ({GRID_POINT_COUNT} 点)...')
         t0 = time.time()
         gs = grid_search_2d(L_J, G_pv_J, G_w_J, lam=lam, verbose=True)
         bp = gs['best_positive']
@@ -677,7 +735,8 @@ def run_q2_2_penalty(output_dir=None):
             continue
         p = per_lambda[lam]
         chk = verify_lambda_positive(p['r_cont'], p['r_int'], p['r_no'],
-                                     p['grid_search'], p['sens_c'], lam)
+                                     p['grid_search'], p['sens_c'], lam,
+                                     L_J, G_pv_J, G_w_J)
         for name, ok, det in chk:
             print(f"  {'✓' if ok else '✗'} {name}  ({det})")
         all_checks.extend(chk)

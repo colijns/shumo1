@@ -6,7 +6,7 @@
   - λ>0 惩罚适用：基准年综合 = 5514296.083+365·λ·1237.175、最优≤基准、
     最优弃电≤基准、消纳率≥基准、最优配置转正、低 c 下为正；
   - 结构性约束（λ=0.3 下 50/100）：功率平衡、不电网充电、余电充电、互斥。
-慢测试（RUN_SLOW=1）：~5min，每个 λ 完整 2501 点网格验证网格最优=连续最优。
+慢测试（RUN_SLOW=1）：每个 λ 完整 13468 点网格验证网格最优=连续最优。
 
 运行：
     python -m pytest Q2/test_q2_2_penalty_verify.py -v
@@ -28,7 +28,7 @@ from q2_storage_penalty import (  # noqa: E402
     solve_continuous, solve_integer, grid_search_2d,
     run_no_storage, run_fixed_storage,
     sensitivity_charge_cost, sensitivity_investment, sensitivity_lambda,
-    LAMBDA_VALUES, P_STEP, E_STEP, T, TOL,
+    LAMBDA_VALUES, P_STEP, E_STEP, P_MAX, E_MAX, T, TOL,
     JOINT_NO_STORAGE_ANNUAL, JOINT_NO_STORAGE_DAILY_CURT,
 )
 from grid_search import grid_search_capacity  # noqa: E402
@@ -132,6 +132,10 @@ def test_penalty_flips_storage_positive(joint_profile, lam):
     assert r['success']
     assert r['E_ess'] > 1e-3, f"λ={lam} 期望 E_ess>0，实际 {r['E_ess']}"
     assert r['P_ess'] > 1e-3
+    assert not r['hits_capacity_upper'], (
+        f"λ={lam} 连续解触碰上界："
+        f"P={r['P_ess']}/{P_MAX}, E={r['E_ess']}/{E_MAX}"
+    )
 
 
 @pytest.mark.parametrize('lam', [0.3, 0.6])
@@ -171,9 +175,9 @@ def test_structural_constraints_at_lambda_03(joint_profile):
         assert abs(r['P_ch'][t] - r['P_ch_pv'][t] - r['P_ch_w'][t]) < 1e-6
         # 互斥
         assert not (r['P_ch'][t] > 1e-4 and r['P_dis'][t] > 1e-4)
-        # 余电充电
-        if r['P_ch'][t] > 1e-4:
-            assert Gpv[t] + Gw[t] - L[t] > -TOL
+        # 余电充电：充电功率不能超过当小时风光余电
+        surplus = max(Gpv[t] + Gw[t] - L[t], 0.0)
+        assert r['P_ch'][t] <= surplus + TOL
     # 惩罚分解
     assert abs(r['daily_cost'] - r['daily_cost_pure'] - r['daily_curt_penalty']) < 1e-2
 
@@ -213,7 +217,7 @@ def test_lambda_saving_grows_with_lambda(joint_profile):
 # 完整网格（慢，默认跳过；RUN_SLOW=1 启用）
 # =====================================================================
 
-@pytest.mark.skipif(not _SLOW, reason="完整 2501 点网格×3 耗时 ~5min，设 RUN_SLOW=1 启用")
+@pytest.mark.skipif(not _SLOW, reason="完整 13468 点网格×3 较慢，设 RUN_SLOW=1 启用")
 @pytest.mark.parametrize('lam', LAMBDA_VALUES)
 def test_grid_matches_continuous(joint_profile, lam):
     """完整 2D 网格全局最优 = 连续 MILP 最优（±工程粒度）。"""
@@ -224,8 +228,7 @@ def test_grid_matches_continuous(joint_profile, lam):
     assert abs(best['P_ess'] - r_cont['P_ess']) <= P_STEP + TOL
     assert abs(best['E_ess'] - r_cont['E_ess']) <= E_STEP + TOL
     # 网格成本 ≥ 连续成本（连续是下界），且差距在工程粒度内。
-    # 连续最优 P 若为分数（如 λ=0.3 时 109.04），网格取 110，差额 = ΔP·C_P_ESS/Y
-    # 纯属功率粒度的年化投资差（E=600 两边一致），非逻辑错误。
+    # 连续最优为分数时，网格按 5 kW/10 kWh 工程粒度取整，允许粒度内差异。
     assert best['annual_cost'] >= r_cont['annual_cost'] - ANN_TOL
     assert abs(best['annual_cost'] - r_cont['annual_cost']) <= _GRANULARITY_BOUND + ANN_TOL
 

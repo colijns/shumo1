@@ -42,6 +42,7 @@ def solve_park_optimization(
     c_p_ess=None,   # 储能功率单价覆盖；None 表示用 data_loader.C_P_ESS
     c_e_ess=None,   # 储能容量单价覆盖；None 表示用 data_loader.C_E_ESS
     curt_penalty=0.0,  # 弃电惩罚因子 λ (元/kWh)；0 时退化为 View A (弃电免费)
+    surplus_only_charge=False,  # True 时储能只能吸收当小时风光余电
 ):
     """
     求解单个园区的储能运行优化 MILP 模型。
@@ -59,9 +60,11 @@ def solve_park_optimization(
         c_p_ess, c_e_ess: 储能功率/容量单价覆盖；None 时用 data_loader 常量。
                           用于 Q2(2) 投资价格敏感性。默认值下与原行为完全一致。
         curt_penalty    : 弃电惩罚因子 λ (元/kWh)，对弃风弃光计价。
-                          默认 0 = View A（弃电不计成本），Q1/Q2(1)/Q2(2) 无惩罚版行为不变。
-                          >0 时目标函数加 λ·(P_curt_pv+P_curt_w)·Δt，daily_cost 含惩罚项；
-                          另导出 daily_curt_penalty 与 daily_cost_pure（不含惩罚）。
+                           默认 0 = View A（弃电不计成本），Q1/Q2(1)/Q2(2) 无惩罚版行为不变。
+                           >0 时目标函数加 λ·(P_curt_pv+P_curt_w)·Δt，daily_cost 含惩罚项；
+                           另导出 daily_curt_penalty 与 daily_cost_pure（不含惩罚）。
+        surplus_only_charge: True 时显式限制 P_ch,t 不超过当小时风光总出力与负荷之差的正部，
+                           防止“风光充电、同时购电供负荷”。默认 False 以保持旧模型向后兼容。
 
     返回：
         dict，包含求解状态、变量值、各项指标
@@ -133,32 +136,38 @@ def solve_park_optimization(
     for t in t_range:
         prob += P_ch[t] == P_ch_pv[t] + P_ch_w[t], f'ch_sum_{t}'
 
-    # (4) 负荷功率平衡
+    # (4) 可选：储能只能吸收当小时风光余电
+    if surplus_only_charge:
+        for t in t_range:
+            renewable_surplus = max(float(G_pv[t]) + float(G_w[t]) - float(load[t]), 0.0)
+            prob += P_ch[t] <= renewable_surplus, f'surplus_charge_max_{t}'
+
+    # (5) 负荷功率平衡
     for t in t_range:
         prob += (P_load_pv[t] + P_load_w[t] + P_dis[t] + P_grid[t]
                  == load[t]), f'load_balance_{t}'
 
-    # (5) 储能电量递推: E[t+1] = E[t] + eta_c * P_ch[t] * dt - P_dis[t] * dt / eta_d
+    # (6) 储能电量递推: E[t+1] = E[t] + eta_c * P_ch[t] * dt - P_dis[t] * dt / eta_d
     for t in t_range:
         prob += (E[t+1] == E[t] + ETA_C * P_ch[t] * DT - P_dis[t] * DT / ETA_D), f'soc_trans_{t}'
 
-    # (6) SOC 上下限
+    # (7) SOC 上下限
     for t in list(t_range) + [24]:
         prob += E[t] >= S_MIN * actual_E_ess, f'soc_low_{t}'
         prob += E[t] <= S_MAX * actual_E_ess, f'soc_high_{t}'
 
-    # (7) 初始 SOC
+    # (8) 初始 SOC
     prob += E[0] == S_0 * actual_E_ess, 'init_soc'
 
-    # (8) 日末 SOC = 初始 SOC
+    # (9) 日末 SOC = 初始 SOC
     prob += E[24] == E[0], 'end_soc'
 
-    # (9) 储能充放电功率上限
+    # (10) 储能充放电功率上限
     for t in t_range:
         prob += P_ch[t] <= actual_P_ess, f'ch_max_{t}'
         prob += P_dis[t] <= actual_P_ess, f'dis_max_{t}'
 
-    # (10) 禁止同时充放电（MILP 互斥约束）
+    # (11) 禁止同时充放电（MILP 互斥约束）
     for t in t_range:
         prob += P_ch[t] <= big_M * z[t], f'mutex_ch_{t}'
         prob += P_dis[t] <= big_M * (1 - z[t]), f'mutex_dis_{t}'
@@ -300,25 +309,30 @@ def solve_park_optimization(
     return result
 
 
-def run_no_storage(load, G_pv, G_w, curt_penalty=0.0):
+def run_no_storage(load, G_pv, G_w, curt_penalty=0.0, surplus_only_charge=False):
     """无储能方案 - 也走 MILP 以保证成本口径一致"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=0, E_ess=0,
                                    optimize_capacity=False,
-                                   curt_penalty=curt_penalty)
+                                   curt_penalty=curt_penalty,
+                                   surplus_only_charge=surplus_only_charge)
 
 
-def run_fixed_storage(load, G_pv, G_w, P_ess=50, E_ess=100, curt_penalty=0.0):
+def run_fixed_storage(load, G_pv, G_w, P_ess=50, E_ess=100,
+                      curt_penalty=0.0, surplus_only_charge=False):
     """固定容量储能方案"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=P_ess, E_ess=E_ess,
                                    optimize_capacity=False,
-                                   curt_penalty=curt_penalty)
+                                   curt_penalty=curt_penalty,
+                                   surplus_only_charge=surplus_only_charge)
 
 
-def run_optimized_storage(load, G_pv, G_w, curt_penalty=0.0):
+def run_optimized_storage(load, G_pv, G_w, curt_penalty=0.0,
+                          surplus_only_charge=False):
     """连续容量理论最优方案"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=0, E_ess=0,
                                    optimize_capacity=True,
-                                   curt_penalty=curt_penalty)
+                                   curt_penalty=curt_penalty,
+                                   surplus_only_charge=surplus_only_charge)
 
 
 def run_engineering_storage(
@@ -326,6 +340,7 @@ def run_engineering_storage(
     P_step=5, E_step=10,
     P_max=200, E_max=600,
     curt_penalty=0.0,
+    surplus_only_charge=False,
 ):
     """按工程步长直接求整数容量最优方案。"""
     return solve_park_optimization(
@@ -334,14 +349,17 @@ def run_engineering_storage(
         capacity_steps=(P_step, E_step),
         capacity_bounds=(P_max, E_max),
         curt_penalty=curt_penalty,
+        surplus_only_charge=surplus_only_charge,
     )
 
 
-def run_fixed_capacity(load, G_pv, G_w, P_ess, E_ess, curt_penalty=0.0):
+def run_fixed_capacity(load, G_pv, G_w, P_ess, E_ess, curt_penalty=0.0,
+                       surplus_only_charge=False):
     """求解指定容量下的最优运行策略（用于网格搜索/取整验证）"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=P_ess, E_ess=E_ess,
                                    optimize_capacity=False,
-                                   curt_penalty=curt_penalty)
+                                   curt_penalty=curt_penalty,
+                                   surplus_only_charge=surplus_only_charge)
 
 
 if __name__ == '__main__':

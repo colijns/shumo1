@@ -19,7 +19,8 @@ def grid_search_capacity(load, G_pv, G_w,
                           P_range=(0, 300, 5),
                           E_range=(0, 1000, 10),
                           verbose=True,
-                          curt_penalty=0.0):
+                          curt_penalty=0.0,
+                          surplus_only_charge=False):
     """
     网格搜索最优储能容量。
 
@@ -30,6 +31,7 @@ def grid_search_capacity(load, G_pv, G_w,
         verbose : 是否打印进度
         curt_penalty : 弃电惩罚因子 λ (元/kWh)，透传给 solve_park_optimization。
                        默认 0 = View A，与原行为一致。
+        surplus_only_charge : True 时储能只能吸收当小时风光余电。
 
     返回：
         dict:
@@ -58,7 +60,8 @@ def grid_search_capacity(load, G_pv, G_w,
                 print(f'  网格搜索进度: {count}/{total} ({100*count/total:.0f}%)')
 
             result = run_fixed_capacity(load, G_pv, G_w, P_ess=p, E_ess=e,
-                                        curt_penalty=curt_penalty)
+                                        curt_penalty=curt_penalty,
+                                        surplus_only_charge=surplus_only_charge)
             if not result['success']:
                 continue
 
