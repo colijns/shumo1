@@ -24,7 +24,18 @@ from data_loader_12m import (
     load_12m_data, load_load_12m, DAYS_PER_MONTH,
     K0_PV, K0_W, C_PV, C_W, C_P_ESS, C_E_ESS, grid_price,
 )
-from q3_part2_model import solve_park, DK_MAX, P_MAX, E_MAX
+from q3_part2_model import solve_park, solve_max_green_two_stage, DK_MAX, P_MAX, E_MAX
+
+# 扩大容量上界（覆盖 B max green 全端点）
+DK_MAX_ORIG = DK_MAX
+P_MAX_ORIG = P_MAX
+E_MAX_ORIG = E_MAX
+import q3_part2_model as _m
+_m.DK_MAX = 10000
+_m.P_MAX = 8000
+_m.E_MAX = 20000
+_m.BIG_M = 50000.0
+print(f"[bounds] 扩容: DK {DK_MAX_ORIG}→10000, P {P_MAX_ORIG}→8000, E {E_MAX_ORIG}→20000")
 
 # 输出目录
 OUT_DIR = os.path.join(_HERE, 'output_pareto_part2')
@@ -39,16 +50,17 @@ PARK_NAMES = {'A': '园区A', 'B': '园区B', 'C': '园区C'}
 # 步骤 1: 求端点
 # =====================================================================
 def find_endpoints(park_id, phi_pv, phi_w, load, verbose=True):
-    """返回 (econ_result, max_rload_result) — 均为连续容量。"""
+    """返回 (econ_result, max_rload_result) — 均为连续容量。
+    max_rload 使用两阶段求解：先 max R_load，再 min cost @ R_load_max。"""
     if verbose:
         print(f"\n  [{park_id}] 经济最优 ...")
     econ = solve_park(park_id, phi_pv, phi_w, load, mode='cost', R0=None,
                       integer_cap=False, time_limit=180, verbose=verbose)
 
     if verbose:
-        print(f"  [{park_id}] 最大 R_load ...")
-    rmax = solve_park(park_id, phi_pv, phi_w, load, mode='max_rload', R0=None,
-                      integer_cap=False, time_limit=180, verbose=verbose)
+        print(f"  [{park_id}] 最大 R_load (两阶段) ...")
+    rmax = solve_max_green_two_stage(park_id, phi_pv, phi_w, load,
+                                     integer_cap=False, time_limit=300, verbose=verbose)
 
     return econ, rmax
 

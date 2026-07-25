@@ -39,10 +39,10 @@ C_PV_INV = 2500.0
 C_W_INV = 3000.0
 Y_GEN = 5       # 风光投资回收期（年）
 
-# 容量上界（沿用 Q3(1)）
-DK_MAX = 4000
-P_MAX = 2000
-E_MAX = 8000
+# 容量上界（扩大至覆盖 B max green 全端点；A max green dKpv 仍触界但折中点安全）
+DK_MAX = 10000
+P_MAX = 8000
+E_MAX = 20000
 
 # 工程整数粒度
 DK_STEP = 10
@@ -50,7 +50,7 @@ P_STEP = 5
 E_STEP = 10
 
 # 大M
-BIG_M = 20000.0
+BIG_M = 50000.0
 
 # 求解器超时（秒）
 SOLVER_TIMEOUT = 120
@@ -127,6 +127,10 @@ def solve_park(park_id, phi_pv, phi_w, load, mode='cost', R0=None,
 
     P_ess = _cap_var('P_ess', integer_cap, P_STEP, P_MAX)
     E_ess = _cap_var('E_ess', integer_cap, E_STEP, E_MAX)
+
+    # 储能时长约束：1h ≤ E/P ≤ 6h（物理电池基本约束 + 工程上限）
+    prob += E_ess >= P_ess, "ep_ratio_min"
+    prob += E_ess <= 6 * P_ess, "ep_ratio_max"
 
     # ==== 每月调度变量 ====
     # 用嵌套字典: vars[m][var_name][t]
@@ -457,6 +461,36 @@ def solve_park(park_id, phi_pv, phi_w, load, mode='cost', R0=None,
         'errors': errors,
         'bound_touch': _check_bounds(caps),
     }
+
+
+def solve_max_green_two_stage(park_id, phi_pv, phi_w, load, integer_cap=False,
+                               time_limit=SOLVER_TIMEOUT, verbose=False):
+    """
+    两阶段最大绿色端点求解：
+      Stage 1: maximize R_load（可能有多退化最优解）
+      Stage 2: minimize annual cost，约束 R_load ≥ R_load_max
+
+    返回 cost-minimized max-green 方案，避免退化解中成本虚高的问题。
+    """
+    # Stage 1: maximize R_load
+    r1 = solve_park(park_id, phi_pv, phi_w, load, mode='max_rload', R0=None,
+                    integer_cap=integer_cap, time_limit=time_limit, verbose=verbose)
+    R_max = r1['annual']['R_load']
+
+    if verbose:
+        print(f"  [2-stage] Stage1 R_max={R_max:.4f}, cost={r1['annual']['total_cost']/1e4:.2f}万")
+
+    # Stage 2: minimize cost at that R_load
+    # 使用略小于 R_max 的 R0 以避免数值精度问题导致不可行
+    R0_target = max(0, R_max - 1e-6)
+    r2 = solve_park(park_id, phi_pv, phi_w, load, mode='cost', R0=R0_target,
+                    integer_cap=integer_cap, time_limit=time_limit, verbose=verbose)
+
+    if verbose:
+        print(f"  [2-stage] Stage2 cost={r2['annual']['total_cost']/1e4:.2f}万, "
+              f"R_load={r2['annual']['R_load']:.4f}")
+
+    return r2
 
 
 # =====================================================================
