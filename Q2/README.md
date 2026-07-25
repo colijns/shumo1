@@ -1,26 +1,58 @@
-# 问题2（1）运行说明
+# 问题2 运行说明
 
-三园区**联合运营、无储能**：先把三个园区每小时的负荷与风光出力相加，再统一做功率平衡，研究园区间风光互济的收益。详见 `docs/问题2（1）.md`。
+三园区（A/B/C）联合运营的三个小问：2（1）联合无储能、2（2）联合共享储能（Pareto 主模型）、2（3）联合 vs 独立三层对比。
 
-## 运行
+## 2（1）联合运营、无储能
+
+先把三个园区每小时的负荷与风光出力相加，再统一做功率平衡，研究园区间风光互济的收益。详见 `docs/问题2（1）报告.md`。
 
 ```bash
 conda activate math
-python Q2/q2_main.py                 # 求解 + 输出表格与图片
+python Q2/q2_main.py                       # 求解 + 输出表格与图片
 python -m pytest Q2/test_q2_verify.py -v   # 验收测试
 ```
 
-> 若 `conda activate` 在当前 shell 不生效，可直接用 math 环境的 python：
-> `& "E:\Software\Scoop\apps\miniconda3\current\envs\math\python.exe" Q2/q2_main.py`
+结果保存在 `Q2/output/`。联合无储能年供电成本 5,514,296.08 元，风光消纳率 92.437%。
 
-结果保存在 `Q2/output/`。
+## 2（2）联合共享储能 -- Pareto ε-约束法（主模型）
+
+纯经济最优为 0/0（储能投资收益不足），故采用 ε-约束法构造年实际成本-风光消纳率 Pareto 前沿，等权理想点距离选折中点。详见 `docs/问题2（2）报告.md`。
+
+```bash
+python Q2/q2_pareto.py                       # Pareto 前沿 + 理想点选型 + 9 项验证
+python -m pytest Q2/test_q2_pareto.py -v     # 24 项验收测试
+```
+
+结果保存在 `Q2/output_pareto/`。推荐配置 **175 kW / 890 kWh**（$R_0^\ast=97\%$），实际消纳率 97.019%，年实际成本 5,575,300.76 元。
+
+### λ 敏感性分析（补充）
+
+弃电惩罚因子 λ 的敏感性分析作为补充见 `docs/问题2（2）lambda敏感性.md`，不决定主结论。代码与输出独立：
+
+```bash
+python Q2/q2_storage_penalty.py              # λ∈{0,0.3,0.6} 敏感性
+python -m pytest Q2/test_q2_2_penalty_verify.py -v
+```
+
+结果在 `Q2/output_penalty_revised/`。
+
+## 2（3）联合 vs 独立三层对比
+
+三层比较（最终方案 / 纯经济 / 同 97% 标准）量化联合运营年收益。详见 `docs/问题2（3）报告.md`。
+
+```bash
+python Q2/q2_3_compare.py                       # 三层对比 + doc 预测值校验
+python -m pytest Q2/test_q2_3_compare.py -v     # 15 项验收测试
+```
+
+结果保存在 `Q2/output_q2_3/`。三层年收益：最终方案 30.13 万元（5.13%）、纯经济 36.23 万元（6.17%）、同 97% 标准 44.01 万元（7.32%）。
 
 ## 实现要点
 
-- **复用 Q1 统一 MILP 模型**（见 `Q2/docs/adr/0001-reuse-q1-unified-milp.md`）：跨目录 import `Q1/data_loader` 与 `Q1/milp_model.run_no_storage`。储能功率/容量设为 0 时，该模型自动退化为本问的联合无储能模型，成本口径与问题1 完全一致。
-- **联合profile**：`L^J = L_A+L_B+L_C`、`G^{pv,J} = ΣG^{pv}`、`G^{w,J} = ΣG^{w}`（园区B无光伏、园区A无风电）。
-- **对比基准**：在 Q2 内重算三园区独立无储能结果并求和，不依赖 Q1 输出文件，保证同口径。
-- **互济不变式**：不计损耗时，每 1 kWh 园区间互济同时减少 1 kWh 弃电与 1 kWh 电网购电，二者减少量相等。
+- **复用 Q1 统一 MILP 模型**（见 `Q2/docs/adr/0001-reuse-q1-unified-milp.md`）：跨目录 import `Q1/data_loader` 与 `Q1/milp_model`。储能功率/容量设为 0 时自动退化为联合无储能模型。
+- **联合 profile**：$L^J=L_A+L_B+L_C$、$G^{\mathrm{pv},J}=\Sigma G^{\mathrm{pv}}$、$G^{\mathrm{w},J}=\Sigma G^{\mathrm{w}}$（园区 B 无光伏、园区 A 无风电）。
+- **ε-约束扩展**（ADR 0004）：`solve_park_optimization` 加可选 `min_accom_rate=None`，默认 None 时不加约束（向后兼容），设定时施加 $R_{\mathrm{re}}\geq R_0$。
+- **充电计价口径**（ADR 0002）：储能充电按 0.4/0.5 元/kWh 计（与消纳同价），弃电不计成本。该口径在 Pareto 主模型与 λ 补充中一致。
 
 ## 模型口径
 
@@ -30,37 +62,10 @@ python -m pytest Q2/test_q2_verify.py -v   # 验收测试
 - 联合系统整体不向外部电网售电；
 - 不考虑园区间输电容量、传输损耗与内部结算费用。
 
-## 结果摘要
-
-| 指标 | 三园区独立无储能之和 | 联合无储能 | 联合后的变化 |
-|---|---:|---:|---:|
-| 日负荷电量/kWh | 23387.000 | 23387.000 | 0 |
-| 日电网购电量/kWh | 10005.815 | 8266.270 | -1739.545 |
-| 日弃光量/kWh | 1503.640 | 84.610 | -1419.030 |
-| 日弃风量/kWh | 1473.080 | 1152.565 | -320.515 |
-| 日弃风弃光总量/kWh | 2976.720 | 1237.175 | -1739.545 |
-| 风光消纳率 | 81.803% | 92.437% | +10.634 个百分点 |
-| 日供电成本/元 | 16119.336 | 15107.661 | -1011.676 |
-| 年供电成本/元 | 5883557.640 | 5514296.083 | -369261.558 |
-| 单位供电成本/(元·kWh⁻¹) | 0.6892 | 0.6460 | -0.0433 |
-
-联合运营使年供电成本下降约 36.93 万元，园区间有效互济电量 1739.545 kWh/天。
-
-## 输出文件
-
-| 文件 | 内容 |
-|---|---|
-| `问题2_1_逐时联合运行表.xlsx` | 24h 联合负荷/光伏/风电、光伏直供、风电直供、电网购电、弃光、弃风 |
-| `问题2_1_经济指标汇总.xlsx` | 联合无储能各项经济指标 |
-| `问题2_1_独立与联合对比.xlsx` | 独立之和 vs 联合 vs 变化量 |
-| `联合典型日曲线.png` | 联合负荷、联合光伏、联合风电典型日曲线 |
-| `独立vs联合对比图.png` | 购电量、弃电量、年成本对比柱状图 |
-
-## 验收
-
-`test_q2_verify.py` 覆盖 `docs/问题2（1）.md` §9 全部 checklist 与 §6 数值（容差 0.5 kWh / 1 元），共 11 个用例，21 项检查全部通过。
-
 ## 相关文档
 
-- `Q2/CONTEXT.md` -- 术语表
-- `Q2/docs/adr/0001-reuse-q1-unified-milp.md` -- 复用 Q1 统一 MILP 的决策记录
+- `Q2/CONTEXT.md` -- 术语表（含 Pareto/ε-约束/理想点距离/λ 补充）
+- `Q2/docs/adr/0001-reuse-q1-unified-milp.md` -- 复用 Q1 统一 MILP
+- `Q2/docs/adr/0002-storage-charge-costed-as-accommodation.md` -- 充电计价口径（主结论已被 0004 取代，口径仍有效）
+- `Q2/docs/adr/0003-curtailment-penalty-view-c.md` -- λ 法（主结论已被 0004 取代，降级为补充）
+- `Q2/docs/adr/0004-pareto-as-main-model.md` -- Pareto ε-约束法作为主模型（当前主结论）

@@ -43,6 +43,7 @@ def solve_park_optimization(
     c_e_ess=None,   # 储能容量单价覆盖；None 表示用 data_loader.C_E_ESS
     curt_penalty=0.0,  # 弃电惩罚因子 λ (元/kWh)；0 时退化为 View A (弃电免费)
     surplus_only_charge=False,  # True 时储能只能吸收当小时风光余电
+    min_accom_rate=None,  # 最低风光消纳率 R0（ε-约束法）；None 不加约束（默认，向后兼容）
 ):
     """
     求解单个园区的储能运行优化 MILP 模型。
@@ -65,6 +66,10 @@ def solve_park_optimization(
                            另导出 daily_curt_penalty 与 daily_cost_pure（不含惩罚）。
         surplus_only_charge: True 时显式限制 P_ch,t 不超过当小时风光总出力与负荷之差的正部，
                            防止“风光充电、同时购电供负荷”。默认 False 以保持旧模型向后兼容。
+        min_accom_rate  : 最低风光消纳率 R0（ε-约束法，构造 Pareto 前沿用）。None 时不加约束
+                          （默认，向后兼容）；给定 R0∈[0,1] 时加硬约束
+                          Σ_t(P_curt,pv+P_curt,w)·Δt ≤ (1−R0)·Σ_t(G_pv+G_w)·Δt，即消纳率 R_re ≥ R0。
+                          与 curt_penalty 互不耦合：R0 是硬约束，curt_penalty 是目标函数软惩罚。
 
     返回：
         dict，包含求解状态、变量值、各项指标
@@ -172,6 +177,14 @@ def solve_park_optimization(
         prob += P_ch[t] <= big_M * z[t], f'mutex_ch_{t}'
         prob += P_dis[t] <= big_M * (1 - z[t]), f'mutex_dis_{t}'
 
+    # (12) 最低风光消纳率约束（ε-约束法，构造 Pareto 前沿用）
+    #      Σ_t(P_curt,pv+P_curt,w)·Δt ≤ (1−R0)·Σ_t(G_pv+G_w)·Δt  ⇔  消纳率 R_re ≥ R0
+    if min_accom_rate is not None:
+        _re_gen_daily = float(np.sum(G_pv) + np.sum(G_w)) * DT
+        _curt_daily = pulp.lpSum([(P_curt_pv[t] + P_curt_w[t]) * DT for t in t_range])
+        prob += _curt_daily <= (1.0 - float(min_accom_rate)) * _re_gen_daily, \
+            'min_accommodation_rate'
+
     # ----- 成本参数（默认与 data_loader 常量一致，保证 Q1/Q2(1) 行为不变）-----
     # 充电能量单价：None 时与消纳同价；否则解耦，用于 Q2(2) 充电成本敏感性
     if charge_cost is None:
@@ -267,6 +280,9 @@ def solve_park_optimization(
     result['daily_curt_penalty'] = curt_penalty * result['curt_total']
     result['daily_cost_pure'] = result['daily_cost'] - result['daily_curt_penalty']
 
+    # 最低消纳率约束（ε-约束法），None 表示未施加
+    result['min_accom_rate'] = float(min_accom_rate) if min_accom_rate is not None else None
+
     # 年均投资（固定储能也有投资成本，此处统一计算用于年综合成本）
     result['inv_cost'] = (cp_ess * final_P_ess + ce_ess * final_E_ess)
     result['inv_annual'] = result['inv_cost'] / Y
@@ -309,30 +325,35 @@ def solve_park_optimization(
     return result
 
 
-def run_no_storage(load, G_pv, G_w, curt_penalty=0.0, surplus_only_charge=False):
+def run_no_storage(load, G_pv, G_w, curt_penalty=0.0, surplus_only_charge=False,
+                   min_accom_rate=None):
     """无储能方案 - 也走 MILP 以保证成本口径一致"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=0, E_ess=0,
                                    optimize_capacity=False,
                                    curt_penalty=curt_penalty,
-                                   surplus_only_charge=surplus_only_charge)
+                                   surplus_only_charge=surplus_only_charge,
+                                   min_accom_rate=min_accom_rate)
 
 
 def run_fixed_storage(load, G_pv, G_w, P_ess=50, E_ess=100,
-                      curt_penalty=0.0, surplus_only_charge=False):
+                      curt_penalty=0.0, surplus_only_charge=False,
+                      min_accom_rate=None):
     """固定容量储能方案"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=P_ess, E_ess=E_ess,
                                    optimize_capacity=False,
                                    curt_penalty=curt_penalty,
-                                   surplus_only_charge=surplus_only_charge)
+                                   surplus_only_charge=surplus_only_charge,
+                                   min_accom_rate=min_accom_rate)
 
 
 def run_optimized_storage(load, G_pv, G_w, curt_penalty=0.0,
-                          surplus_only_charge=False):
+                          surplus_only_charge=False, min_accom_rate=None):
     """连续容量理论最优方案"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=0, E_ess=0,
                                    optimize_capacity=True,
                                    curt_penalty=curt_penalty,
-                                   surplus_only_charge=surplus_only_charge)
+                                   surplus_only_charge=surplus_only_charge,
+                                   min_accom_rate=min_accom_rate)
 
 
 def run_engineering_storage(
@@ -341,6 +362,7 @@ def run_engineering_storage(
     P_max=200, E_max=600,
     curt_penalty=0.0,
     surplus_only_charge=False,
+    min_accom_rate=None,
 ):
     """按工程步长直接求整数容量最优方案。"""
     return solve_park_optimization(
@@ -350,16 +372,18 @@ def run_engineering_storage(
         capacity_bounds=(P_max, E_max),
         curt_penalty=curt_penalty,
         surplus_only_charge=surplus_only_charge,
+        min_accom_rate=min_accom_rate,
     )
 
 
 def run_fixed_capacity(load, G_pv, G_w, P_ess, E_ess, curt_penalty=0.0,
-                       surplus_only_charge=False):
+                       surplus_only_charge=False, min_accom_rate=None):
     """求解指定容量下的最优运行策略（用于网格搜索/取整验证）"""
     return solve_park_optimization(load, G_pv, G_w, P_ess=P_ess, E_ess=E_ess,
                                    optimize_capacity=False,
                                    curt_penalty=curt_penalty,
-                                   surplus_only_charge=surplus_only_charge)
+                                   surplus_only_charge=surplus_only_charge,
+                                   min_accom_rate=min_accom_rate)
 
 
 if __name__ == '__main__':
